@@ -1,0 +1,12 @@
+# 软件本体与安装包不进仓库：体积大，可按 cfg 里的版本重新获取
+App/*
+!App/.gitkeep
+Installer/*
+!Installer/.gitkeep
+*.part
+
+# 运行时生成的伪用户目录 / 注册表快照
+Profile/
+ProgramData/
+Public/
+RegistryBackup/
