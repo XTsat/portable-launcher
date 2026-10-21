@@ -2,3 +2,4 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.cfg text eol=crlf
+*.vbs text eol=crlf

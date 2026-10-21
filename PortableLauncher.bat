@@ -279,5 +279,5 @@ if /i "%CFG_InstallMode%"=="none" (
    echo     提示: 也可以设 InstallMode=7z 自动解包, 或 nsis / inno / msi-admin 静默安装
    echo     或者把安装包直接拖到本文件图标上
 )
-pause
+if not defined PORTABLE_NO_PAUSE pause
 exit /b 1

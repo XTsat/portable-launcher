@@ -12,6 +12,7 @@
 | 安装包可以拖拽、给路径、从 URL 下载或自动扫描 | `Installer` / `InstallerUrl` / 拖到 bat 上 |
 | 安装后清掉安装器留下的注册表痕迹，系统保持原状 | `RegBackupKeys` |
 | 在指定环境里启动程序，标题、参数、退出行为可控 | `Name` / `Exe` / `Args` / `Wait` |
+| 无窗口启动，并可一键生成桌面 / 开始菜单快捷方式 | `Launch.vbs` / `CreateShortcut.vbs` / `ShowConsole` |
 
 **关键认知**：这套便携化的本质是**换环境变量**，不是改软件。所以它天然适用于所有「按 `%APPDATA%` / `%USERPROFILE%` 写文件」的程序（绝大多数 Electron / Qt / .NET 桌面程序与绿色软件）。真正需要额外处理的只有两件事：**安装包**和**注册表**。
 
@@ -20,6 +21,8 @@
 ```text
 PortableLauncher.bat    引擎（基本不用改）
 portable.cfg            每个软件一份配置
+Launch.vbs              无窗口启动器（推荐双击这个）
+CreateShortcut.vbs      一键生成桌面/开始菜单快捷方式
 App\                    程序本体（安装/解包到这里）
 Installer\              安装包放这里
 Profile\                伪造的 USERPROFILE
@@ -30,6 +33,47 @@ RegistryBackup\         安装前注册表快照（临时）
 ```
 
 把整个文件夹拷到 U 盘 / 别的机器，双击启动器就能继续用。
+
+## 怎么启动（重要）
+
+便携化的前提是**每次都从这套 shell 里启动**。别双击 `App\` 里的 exe 本体，用下面三种之一：
+
+| 方式 | 说明 |
+|---|---|
+| 双击 `PortableLauncher.bat` | 最直接，会留一个控制台窗口，能看到全部输出 |
+| 双击 `Launch.vbs` | 无控制台窗口，启动后自动消失；失败时弹窗并给退出码 |
+| 桌面 / 开始菜单快捷方式 | 跑一次 `CreateShortcut.vbs` 生成，之后只点它 |
+
+生成快捷方式：
+
+```
+双击 CreateShortcut.vbs                  -> 桌面快捷方式
+cscript CreateShortcut.vbs /startmenu    -> 桌面 + 开始菜单
+```
+
+快捷方式指向 `wscript.exe Launch.vbs`，图标取 cfg 里 `Exe` 的图标，工作目录固定为本目录。所以**文件夹换了盘符或路径后快捷方式就失效**，重跑一次 `CreateShortcut.vbs` 即可（脚本没写死路径，靠运行位置自解析）。
+
+`ShowConsole` 控制 `Launch.vbs` 要不要保留黑窗口：
+
+```
+ShowConsole=0   默认，启动后无窗口，出错才弹窗
+ShowConsole=1   保留控制台，方便看引擎输出
+```
+
+把安装包**拖到 `Launch.vbs` 上**时也会自动显示控制台，方便看安装进度。
+
+### 这些操作会绕过 bat（等于便携化失效）
+
+| 场景 | 后果 | 怎么办 |
+|---|---|---|
+| 直接双击 `App\` 里的 exe | 读真实 `%APPDATA%`，配置散落到系统用户目录 | 养成只点快捷方式的习惯 |
+| 右键 exe「固定到任务栏」后点击 | 固定的是 exe 本体，绕开 bat | 固定那个 `.lnk`，不是 exe |
+| 文件关联 / 自定义协议唤起 | 系统按注册表里的 exe 路径直接启动 | 别注册这类关联；必须时用进程级沙箱工具兜底 |
+| `HKCU\...\Run` 开机自启项 | 同上 | 关掉软件的「开机启动」，改为把快捷方式放进启动文件夹 |
+| 安装器拉起的子进程 | **没问题**，子进程继承环境变量 | —— |
+| 软件自己 spawn 的终端 / helper | **没问题**，同上 | —— |
+
+一句话：**谁启动的进程，决定它继承哪套环境变量**。只有经 bat / Launch.vbs 这一层起来的进程链是便携的。
 
 ## 配置项
 
@@ -47,6 +91,7 @@ RegistryBackup\         安装前注册表快照（临时）
 | `RegBackupKeys` | 逗号分隔的注册表键：安装前导出，安装后删除并回导 |
 | `Env` | 额外环境变量，分号分隔，如 `K=V;K2=V2`（例：`HF_HOME=D:\hf`） |
 | `Redirect` | 0 = 不重定向目录，只做安装/启动 |
+| `ShowConsole` | `Launch.vbs` 是否保留控制台：0 = 隐藏（默认），1 = 保留 |
 
 ## 安装包怎么传进来
 
@@ -105,5 +150,6 @@ RegistryBackup\         安装前注册表快照（临时）
 1. 新建一个空文件夹，放 `PortableLauncher.bat` + `portable.cfg`。
 2. 改 cfg 的 `Name` / `Exe` / `InstallMode` / `Installer`。
 3. 安装包丢进 `Installer\`，双击 `PortableLauncher.bat`。
-4. 检查生成的文件：`Profile\AppData\Roaming` 下应该出现该软件的目录；没出现说明程序不认环境变量，走上面的兜底方案。
-5. 调试写入位置：用文件 / 注册表监控工具（如 Procmon）过滤 `Process Name is <程序>.exe` + `Operation is WriteFile/RegSetValue`，一眼看出它往哪写。
+4. 确认没问题后跑一次 `CreateShortcut.vbs`，以后只点桌面快捷方式。
+5. 检查生成的文件：`Profile\AppData\Roaming` 下应该出现该软件的目录；没出现说明程序不认环境变量，走上面的兜底方案。
+6. 调试写入位置：用文件 / 注册表监控工具（如 Procmon）过滤 `Process Name is <程序>.exe` + `Operation is WriteFile/RegSetValue`，一眼看出它往哪写。
