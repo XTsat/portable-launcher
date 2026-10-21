@@ -9,6 +9,7 @@
 | 软件把配置、缓存、下载内容都写进本文件夹，不再散落到系统用户目录 | `Redirect=1`（默认开启） |
 | 首次运行自动建好目录骨架，不用手动创建 | 自动完成，无需配置 |
 | 把安装包静默装进 `App\`，装完即可启动 | `InstallMode` + `Installer` |
+| 安装包可以拖拽、给路径、从 URL 下载或自动扫描 | `Installer` / `InstallerUrl` / 拖到 bat 上 |
 | 安装后清掉安装器留下的注册表痕迹，系统保持原状 | `RegBackupKeys` |
 | 在指定环境里启动程序，标题、参数、退出行为可控 | `Name` / `Exe` / `Args` / `Wait` |
 
@@ -39,11 +40,34 @@ RegistryBackup\         安装前注册表快照（临时）
 | `Args` | 启动参数 |
 | `Wait` | 1 = 等程序退出后再关窗口 |
 | `InstallMode` | `none` / `nsis` / `inno` / `msi-admin` / `msi-install` / `7z` |
-| `Installer` | 安装包路径（相对 / 绝对 / UNC 均可），如 `Installer\setup.exe` |
+| `Installer` | 安装包路径（相对 / 绝对 / UNC 均可），留空则自动扫描 `Installer\` |
+| `InstallerUrl` | 安装包下载地址，缺失时自动下载并缓存到 `Installer\` |
+| `InstallerSha256` | 可选，安装包 SHA256 校验，不匹配则中止 |
 | `SevenZip` | `InstallMode=7z` 时的 `7z.exe` 路径 |
 | `RegBackupKeys` | 逗号分隔的注册表键：安装前导出，安装后删除并回导 |
 | `Env` | 额外环境变量，分号分隔，如 `K=V;K2=V2`（例：`HF_HOME=D:\hf`） |
 | `Redirect` | 0 = 不重定向目录，只做安装/启动 |
+
+## 安装包怎么传进来
+
+不必非得放 `Installer\`。引擎按优先级依次尝试，找到第一个能用的就装：
+
+| 优先级 | 方式 | 写法 |
+|---|---|---|
+| 1 | **拖拽**：把安装包拖到 `PortableLauncher.bat` 图标上 | `PortableLauncher.bat "D:\下载\setup.exe"`，命令行参数覆盖 cfg；扩展名是 `.msi` 自动按 `msi-admin` 走，`.7z` 按 `7z` 走 |
+| 2 | **显式路径**（相对 / 绝对 / UNC 网络盘） | `Installer=D:\packages\setup.exe`、`Installer=\\nas\share\setup.exe`、`Installer={{ROOT}}\Installer\setup.exe` |
+| 3 | **URL 自动下载**并缓存到 `Installer\`（下次不再下） | `InstallerUrl=https://example.com/download/setup.exe`，配 `InstallerSha256=` 防换包 |
+| 4 | **自动扫描** `Installer\` 下的 `*.exe / *.msi / *.7z`，取名字排序最后一个 | 什么都不用写 |
+
+下载优先用系统自带的 `curl.exe`（Win10 1803+ 都有），没有则回退 PowerShell 的下载命令；先下到 `.part` 再改名，不会留下半截文件。
+
+推荐组合：
+
+- **一次性的机器 / U 盘**：`Installer\` 里放包，装完把包删掉，以后 `InstallMode` 改成 `none` 直接启动。
+- **团队 / 多机分发**：包放 NAS 共享，cfg 写 UNC 路径；或写 `InstallerUrl` + `InstallerSha256`，cfg 本身可以只发一份。
+- **调试某个不认识的安装包**：拖上去试 `7z`，看解出来的目录结构再定 `InstallMode`。
+
+安全提醒：`InstallerUrl` 是供应链入口，务必配 `InstallerSha256`，并在可信网络内使用。
 
 ## 各种安装包怎么选 InstallMode
 

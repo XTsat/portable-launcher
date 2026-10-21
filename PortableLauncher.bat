@@ -26,6 +26,8 @@ set "CFG_Wait=0"
 set "CFG_Redirect=1"
 set "CFG_InstallMode=none"
 set "CFG_Installer="
+set "CFG_InstallerUrl="
+set "CFG_InstallerSha256="
 set "CFG_SevenZip="
 set "CFG_RegBackupKeys="
 set "CFG_Env="
@@ -38,7 +40,20 @@ if exist "%Root%\portable.cfg" for /f "usebackq eol=# tokens=1,* delims==" %%A i
    if not "!k!"=="" set "CFG_!k!=!v!"
 )
 
-rem ---------------------------- 3. 目录布局 ---------------------------------
+rem ---------------- 3. 命令行覆盖：把安装包直接拖到本 bat 上 ----------------
+rem   PortableLauncher.bat "D:\下载\setup.exe"
+if not "%~1"=="" (
+   echo [*] 命令行指定安装包: "%~1"
+   set "CFG_Installer=%~1"
+   if /i "%CFG_InstallMode%"=="none" (
+      set "CFG_InstallMode=nsis"
+      if /i "%~x1"==".msi" set "CFG_InstallMode=msi-admin"
+      if /i "%~x1"==".7z"  set "CFG_InstallMode=7z"
+      echo [*] 未配置 InstallMode, 按扩展名推断为 !CFG_InstallMode!
+   )
+)
+
+rem ---------------------------- 4. 目录布局 ---------------------------------
 set "AppDir=%Root%\App"
 set "UserProfile=%Root%\Profile"
 set "AppData=%UserProfile%\AppData\Roaming"
@@ -77,15 +92,16 @@ if not "%CFG_Env%"=="" (
    )
 )
 
-rem ---------------------------- 4. 安装（如需要） ----------------------------
+rem ---------------------------- 5. 安装（如需要） ----------------------------
 call :resolve ExeFull "%CFG_Exe%"
+if "%CFG_Exe%"=="" goto :noapp
 if not exist "%ExeFull%" if /i not "%CFG_InstallMode%"=="none" call :install
 if not exist "%ExeFull%" goto :noapp
 
-rem ---------------------------- 5. 应用专属补丁 ------------------------------
+rem ---------------------------- 6. 应用专属补丁 ------------------------------
 call :hook_before
 
-rem ---------------------------- 6. 启动 -------------------------------------
+rem ---------------------------- 7. 启动 -------------------------------------
 echo [*] 启动 %CFG_Name%
 if "%CFG_Wait%"=="1" (
    start "%CFG_Name%" /wait /D "%Root%" "%ExeFull%" %CFG_Args%
@@ -100,11 +116,18 @@ rem  子过程
 rem ==========================================================================
 
 :install
-call :resolve InstallerFull "%CFG_Installer%"
+call :resolveInstaller
 if not exist "%InstallerFull%" (
-   echo [x] 找不到安装包: "%InstallerFull%"
+   echo [x] 找不到安装包。
+   echo     可用的传递方式:
+   echo       1. 把安装包放进 "%Root%\Installer\" ^(文件名任意, 自动取最新一个^)
+   echo       2. portable.cfg 里写 Installer=D:\path\setup.exe 或 \\nas\share\setup.exe
+   echo       3. portable.cfg 里写 InstallerUrl=https://... 自动下载并缓存
+   echo       4. 直接把安装包拖到 PortableLauncher.bat 图标上
    exit /b 1
 )
+call :verifyHash
+if errorlevel 1 exit /b 1
 echo [*] 安装模式 %CFG_InstallMode%: "%InstallerFull%"
 call :regBackup
 if /i "%CFG_InstallMode%"=="nsis"        "%InstallerFull%" /S /D="%AppDir%"
@@ -116,6 +139,75 @@ if /i "%CFG_InstallMode%"=="7z" (
    "%CFG_SevenZip%" x "%InstallerFull%" -o"%AppDir%" -y >nul
 )
 call :regRestore
+exit /b 0
+
+rem ==========================================================================
+rem  安装包定位：优先级 命令行拖入 > 显式路径 > URL 下载 > 自动扫描 Installer\
+rem ==========================================================================
+:resolveInstaller
+set "InstallerFull="
+rem 0) 指针文件/URL 直接塞进 Installer 的情况
+if /i "!CFG_Installer:~0,4!"=="http" (
+   set "CFG_InstallerUrl=%CFG_Installer%"
+   set "CFG_Installer="
+)
+rem 1) 显式路径（相对 / 绝对 / UNC / {{ROOT}}）
+if not "%CFG_Installer%"=="" (
+   call :resolve InstallerFull "%CFG_Installer%"
+   if not exist "!InstallerFull!" (
+      echo [!] 配置的安装包不存在, 继续尝试其它来源: "!InstallerFull!"
+      set "InstallerFull="
+   )
+)
+rem 2) 下载（已有同名缓存则直接用，不重复下）
+if "%InstallerFull%"=="" if not "%CFG_InstallerUrl%"=="" call :download
+rem 3) 自动扫描 Installer\ 下的 exe/msi/7z，取名字排序最后的（通常是最新）
+if "%InstallerFull%"=="" call :scanInstaller
+exit /b 0
+
+:download
+set "url=%CFG_InstallerUrl%"
+set "fname="
+for %%U in ("%url%") do set "fname=%%~nxU"
+if "%fname%"=="" set "fname=installer.tmp"
+if not exist "%Root%\Installer" mkdir "%Root%\Installer" >nul 2>&1
+set "dest=%Root%\Installer\%fname%"
+if exist "%dest%" (
+   echo [*] 已存在缓存, 跳过下载: "%dest%"
+   set "InstallerFull=%dest%"
+   exit /b 0
+)
+echo [*] 下载 "%url%"
+set "got=0"
+where curl.exe >nul 2>&1
+if %errorlevel% equ 0 (
+   curl.exe -L --fail --retry 2 -o "%dest%.part" "%url%"
+   if exist "%dest%.part" set "got=1"
+)
+if "%got%"=="0" (
+   powershell -NoProfile -Command "try{Invoke-WebRequest -UseBasicParsing -Uri '%url%' -OutFile '%dest%.part'}catch{exit 1}"
+   if exist "%dest%.part" set "got=1"
+)
+if "%got%"=="1" move /y "%dest%.part" "%dest%" >nul
+if exist "%dest%" (set "InstallerFull=%dest%") else (echo [x] 下载失败)
+exit /b 0
+
+:scanInstaller
+if not exist "%Root%\Installer" exit /b 0
+for /f "delims=" %%A in ('dir /b /a-d /o-n "%Root%\Installer"\*.exe "%Root%\Installer"\*.msi "%Root%\Installer"\*.7z 2^>nul') do (
+   if not defined InstallerFull set "InstallerFull=%Root%\Installer\%%A"
+)
+exit /b 0
+
+rem 可选：InstallerSha256= 校验，防止下载/拷贝被换包
+:verifyHash
+if "%CFG_InstallerSha256%"=="" exit /b 0
+certutil -hashfile "%InstallerFull%" SHA256 | findstr /i /c:"%CFG_InstallerSha256%" >nul
+if errorlevel 1 (
+   echo [x] SHA256 校验失败, 已中止安装: "%InstallerFull%"
+   exit /b 1
+)
+echo [*] SHA256 校验通过
 exit /b 0
 
 rem ---- 安装前备份注册表键（逗号分隔），安装后还原，抹掉安装痕迹 ----
@@ -183,6 +275,9 @@ exit /b 0
 :noapp
 echo [x] 找不到可执行文件 "%ExeFull%"
 echo     请把程序解包/安装到 "%AppDir%"，或检查 portable.cfg 里的 Exe / InstallMode / Installer
-if /i "%CFG_InstallMode%"=="none" echo     提示: 也可以设 InstallMode=7z 自动解包，或 nsis / inno / msi-admin 静默安装
+if /i "%CFG_InstallMode%"=="none" (
+   echo     提示: 也可以设 InstallMode=7z 自动解包, 或 nsis / inno / msi-admin 静默安装
+   echo     或者把安装包直接拖到本文件图标上
+)
 pause
 exit /b 1
